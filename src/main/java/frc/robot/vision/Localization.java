@@ -9,9 +9,7 @@ import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
-import edu.wpi.first.wpilibj.smartdashboard.Field2d;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
-import frc.robot.subsystems.swerve.CommandSwerveDrivetrain;
 import frc.robot.vision.LimelightHelpers.PoseEstimate;
 import frc.robot.vision.LimelightHelpers.RawFiducial;
 import redrocklib.logging.SmartDashboardNumber;
@@ -19,150 +17,220 @@ import redrocklib.logging.SmartDashboardNumber;
 public class Localization {
     private static boolean isSim = false;
 
-    private static int[] validIDs = {6, 7, 8, 9, 10, 11, 17, 18, 19, 20, 21, 22};
-    private static String[] limeLightNames = {"climb", "front"};//, "right", "back"};
-    private static double[][] limeLightStdvs = {
-        // {0.8, 0.8, 9999},
-        {0.9, 0.9, 9999},
-        {1.2, 1.2, 9999}
-    };
+    private static Pose2d storedPose;
 
-    // public static final double timeOf/fset = Utils.getCurrentTimeSeconds();
-    private static SmartDashboardNumber timeOffset = new SmartDashboardNumber("localization/timeoffset", Utils.getCurrentTimeSeconds());
+    private static int[][] validIDs;
+    private static String[] limeLightNames;
+    private static double[][] limeLightStdvs;
+    private static double[] ambiguityThresholds;
 
-    private static LimeLightPoseEstimateWrapper[] wrappers;
+    private static PoseEstimate[] estimates;
 
     private static SmartDashboardNumber kStdvDemoninator = new SmartDashboardNumber("localization/stdv-denom-scale", 30);
-    private static SmartDashboardNumber heading = new SmartDashboardNumber("localization/heading", 0);
 
+    // Must be called before use!
     public static void initialize() {
-        if(wrappers != null)
-            return;
-        wrappers = new LimeLightPoseEstimateWrapper[limeLightNames.length]; // TODO revert on ll addition
-        for (int i = 0; i < limeLightNames.length; i++) { // TODO revert on ll addition
-            wrappers[i] = new LimeLightPoseEstimateWrapper().withName(limeLightNames[i]);
-            LimelightHelpers.SetFiducialIDFiltersOverride(limeLightNames[i], validIDs);
+        Localization.initialize(
+            new int[][] {{6, 7, 8, 9, 10, 11, 17, 18, 19, 20, 21, 22}}, // Tags
+            new String[] {"climb", "front"},                            // Names
+            new double[][] {{0.9, 0.9, 9999}, {1.2, 1.2, 9999}},        // Stdvs
+            new double[] {0.2, 0.1}                                     // Ambiguity
+        );
+    }
+
+    public static void initialize(int[][] vIDs, String[] llNames, double[][] llStdvs, double[] aThresholds) {
+        Localization.limeLightNames = llNames;
+        Localization.limeLightStdvs = llStdvs;
+        Localization.ambiguityThresholds = aThresholds;
+
+        if(vIDs.length < llNames.length)
+        {
+            Localization.validIDs = new int[llNames.length][];
+            for(int i = 0; i < llNames.length; i++)
+                Localization.validIDs[i] = vIDs[0];
         }
+        else
+            Localization.validIDs = vIDs;
+
+        estimates = new PoseEstimate[Localization.limeLightNames.length];
+        for (int i = 0; i < Localization.limeLightNames.length; i++) {
+            LimelightHelpers.SetFiducialIDFiltersOverride(limeLightNames[i], validIDs[i]);
+        }
+
         isSim = Utils.isSimulation();
     }
 
-    public static void updateHeading(double headingDegrees) {
-        heading.putNumber(headingDegrees);
-        if(wrappers == null)
-            initialize();
+    public static void updateHeading(double headingDegrees, double rotationRateDegrees) {
+        if(estimates == null)
+        {
+            Localization.initialize();
+        }
+
         for(int i = 0; i < limeLightNames.length; i++){
             String name = "limelight-" + limeLightNames[i];
             SmartDashboard.putNumber("localization/"+name+"/heading", headingDegrees);
-            LimelightHelpers.SetRobotOrientation(name, headingDegrees, CommandSwerveDrivetrain.getInstance().getRotationRateDegrees(), 0, 0, 0, 0);
+            LimelightHelpers.SetRobotOrientation(name, headingDegrees, rotationRateDegrees, 0, 0, 0, 0);
             PoseEstimate estimate = LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2(name);
-            if (estimate != null){ // TODO revert on ll addition
+            if (estimate != null){
                 Logger.recordOutput("limelight/" + limeLightNames[i] + "/avgTagDist", estimate.avgTagDist);
-                double ambiguitySum = 0;
-                for (RawFiducial fiducial : estimate.rawFiducials)
-                    ambiguitySum += fiducial.ambiguity;
-                wrappers[i].withPoseEstimate(estimate).withTagInVision(LimelightHelpers.getTV(name)).withAmbiguity(ambiguitySum/estimate.rawFiducials.length);
             }
 
             Pose2d mt1Pose = LimelightHelpers.getBotPose2d_wpiBlue(name);
             Logger.recordOutput("limelight/" + limeLightNames[i] + "/MT1", mt1Pose==null?new Pose2d():mt1Pose);
             Logger.recordOutput("limelight/" + limeLightNames[i] + "/MT2", estimate==null?new Pose2d():estimate.pose);
+            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/avgTagDist", estimate.avgTagDist);
+            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/tagCount", estimate.tagCount);
+            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/avgAmbiguity", Localization.getAvgAmbiguity(estimate, i));
+            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/belowAmbiguityThreshold", Localization.belowAmbiguityThreshold(estimate, i));
         }
 
-        Pose2d pose = getPose2d();
-        SmartDashboard.putNumber("localization/pose/x", pose.getX());
-        SmartDashboard.putNumber("localization/pose/y", pose.getY());
-        SmartDashboard.putNumber("localization/pose/heading", pose.getRotation().getDegrees());
+        if(storedPose != null)
+        {
+            SmartDashboard.putNumber("localization/pose/x", storedPose.getX());
+            SmartDashboard.putNumber("localization/pose/y", storedPose.getY());
+            SmartDashboard.putNumber("localization/pose/heading", storedPose.getRotation().getDegrees());
+            Logger.recordOutput("localization/storedPose", storedPose);
+        }
     }
 
-    public static LimeLightPoseEstimateWrapper[] getPoseEstimates() {
-        // heading.putNumber(headingDegrees);
-        // if(wrappers == null)
-        //     initialize();
-        // for(int i = 0; i < limeLightNames.length; i++){
-        //     String s = "limelight-" + limeLightNames[i];
-        //     SmartDashboard.putNumber("localization/"+s+"/heading", headingDegrees);
-        //     LimelightHelpers.SetRobotOrientation(s, headingDegrees, CommandSwerveDrivetrain.getInstance().getRotationRateDegrees(), 0, 0, 0, 0);
-        //     wrappers[i].withPoseEstimate(LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2(s))
-        //                 .withTagInVision(LimelightHelpers.getTV(s));
-        // }
-
-        // Pose2d pose = getPose2d();
-        // SmartDashboard.putNumber("localization/pose/x", pose.getX());
-        // SmartDashboard.putNumber("localization/pose/y", pose.getY());
-        // SmartDashboard.putNumber("localization/pose/heading", pose.getRotation().getDegrees());
-
-        return wrappers;
+    public static PoseEstimate[] getPoseEstimates() {
+        return estimates;
     }
 
-    public static Pose2d getPose2d() {
-        return CommandSwerveDrivetrain.getInstance().getPose();
+    public static void setPose(Pose2d pose) {
+        storedPose = pose;
     }
 
-    public static double getMegatag1Pose2dFromClimb() {
-        // if (LimelightHelpers.getTV(limeLightNames[1])) {
-        //     SmartDashboard.putBoolean("locaization/mt1-tiv", true);
-        // if (isSim) return 0;
-        // return 0;
+    public static Pose2d getPose() {
+        return storedPose;
+    }
+
+    public static double getMT1Heading() {
+        if(limeLightNames.length == 0)
+        {
+            Logger.recordOutput("localization/exception", "No limelights found for MT1 heading");
+            return -1;
+        }
         return LimelightHelpers.getBotPoseEstimate_wpiBlue("limelight-" + limeLightNames[0]).pose.getRotation().getDegrees();
-        // }
-        // SmartDashboard.putBoolean("locaization/mt1-tiv", false);
-        // return new Pose2d();
     }
 
-    public static class LimeLightPoseEstimateWrapper {
-        public LimelightHelpers.PoseEstimate poseEstimate = new PoseEstimate();
-        public String name;
-        public boolean tiv;
-        private SmartDashboardNumber[] kStdvs = new SmartDashboardNumber[3];
-        public Field2d field = new Field2d();
-        private double ambiguity;
+    public static String getLLName(int index) {
+        return limeLightNames[index];
+    }
 
-        public Matrix<N3, N1> getStdvs(double distanceToTarget) {
-            return VecBuilder.fill(
-                adjustStdv(kStdvs[0].getNumber(), distanceToTarget),
-                adjustStdv(kStdvs[1].getNumber(), distanceToTarget),
-                adjustStdv(kStdvs[2].getNumber(), distanceToTarget)
-            );
+    public static Matrix<N3, N1> getStdvs(double distanceToTarget, int index) {
+        if(index > limeLightStdvs.length && limeLightStdvs.length > 0)
+            index = 0;
+        
+        if(index < 0 || limeLightStdvs.length == 0)
+        {
+            Logger.recordOutput("localization/exception", "Stdv index out of bounds! (" + index + "/" + limeLightStdvs.length + ")");
+            return VecBuilder.fill(0,0,0);
         }
 
-        public LimeLightPoseEstimateWrapper withName(String name) {
-            this.name = name;
-            double[] stdvDefVals = new double[] {0.8, 0.8, 9999};
-            for (int i = 0; i < Localization.limeLightNames.length; i++) {
-                if (Localization.limeLightNames[i].equals(name)) {
-                    stdvDefVals = limeLightStdvs[i];
-                    break;
+        return VecBuilder.fill(
+            adjustStdv(limeLightStdvs[index][0], distanceToTarget),
+            adjustStdv(limeLightStdvs[index][1], distanceToTarget),
+            adjustStdv(limeLightStdvs[index][2], distanceToTarget)
+        );
+    }
+
+    private static double adjustStdv(double stdv, double distanceToTarget) {
+        return stdv + stdv * (distanceToTarget * distanceToTarget) / kStdvDemoninator.getNumber();
+    }
+
+    public static double getAmbiguityThreshold(int index) {
+        if(index < 0 || index > ambiguityThresholds.length)
+        {
+            Logger.recordOutput("localization/exception", "Ambiguity threshold index out of bounds (" + index + "/" + ambiguityThresholds.length + ")");
+            return -1;
+        }
+
+        return ambiguityThresholds[index];
+    }
+
+    public static double getAvgAmbiguity(PoseEstimate estimate, int index) {
+        double ambiguitySum = 0;
+        int validTags = 0;
+        for (RawFiducial fiducial : estimate.rawFiducials)
+            for(int i : validIDs[validIDs.length>index&&index>=0?index:0])
+                if(i == fiducial.id)
+                {
+                    ambiguitySum += fiducial.ambiguity;
+                    validTags++;
                 }
-            }
+        
+        return ambiguitySum /= validTags;
+    }
 
-            kStdvs[0] = new SmartDashboardNumber(this.name + "/" + this.name + "-stdvX", stdvDefVals[0]);
-            kStdvs[1] = new SmartDashboardNumber(this.name + "/" + this.name + "-stdvY", stdvDefVals[1]);
-            kStdvs[2] = new SmartDashboardNumber(this.name + "/" + this.name + "-stdvTheta", stdvDefVals[2]);
+    public static boolean belowAmbiguityThreshold(PoseEstimate estimate, int index) {
+        return Localization.getAvgAmbiguity(estimate, index) < Localization.getAmbiguityThreshold(index);
+    }
+}
 
-            SmartDashboard.putData(this.name + "/" + this.name + "-field", this.field);
 
-            return this;
+/*
+
+// Proper use in CommandSwerveDrivetrain:
+
+import frc.robot.vision.LimelightHelpers;
+import frc.robot.vision.Localization;
+
+public void setHeadingFromMegatag1() {
+    double deg = 0;
+    try {
+        deg = Localization.getMT1Heading();
+    } catch (Exception e) {
+        Logger.recordOutput("localization/exception", e.getMessage());
+        deg = 0;
+    }
+    if(deg < 0)
+        deg = 0;
+    this.targetHeadingDegrees = deg;
+    this.resetPose(
+        new Pose2d(
+            this.getPose().getX(),
+            this.getPose().getY(),
+            Rotation2d.fromDegrees(deg)
+        )
+    );
+}
+
+public void periodic() {
+    Localization.updateHeading(this.getHeadingDegrees(), this.getRotationRateDegrees()); // Update ll values every cycle
+    if (visionEnabled.getValue()) updateVisionMeasurements(); // Only use ll for pose if vision is enabled
+    Localization.setPose(this.getPose()); // Update stored pose
+}
+
+public void updateVisionMeasurements() {
+    LimelightHelpers.PoseEstimate[] estimates = Localization.getPoseEstimates();
+    for(int i = 0; i < estimates.length; i++) {
+        String name = Localization.getLLName(i);
+        if(poseEstimateIsValid(estimates[i], i))
+        {
+            this.addVisionMeasurement(
+                estimates[i].pose,
+                Utils.getCurrentTimeSeconds() - estimates[i].latency * 0.001,
+                Localization.getStdvs(estimates[i].avgTagDist, i));
+            
+            SmartDashboard.putBoolean("localization/" + name + "-vision-accepted", true);
+            SmartDashboard.putNumber("localization/" + name + "-latency", estimates[i].latency * 0.001);
+            Logger.recordOutput("localization/" + name + "/visionAccepted", true);
+            Logger.recordOutput("localization/" + name + "/latency", estimates[i].latency * 0.001);
         }
-
-        public LimeLightPoseEstimateWrapper withPoseEstimate(LimelightHelpers.PoseEstimate estimate) {
-            this.poseEstimate = estimate;
-            return this;
-        }
-
-        public LimeLightPoseEstimateWrapper withTagInVision(boolean b) {
-            this.tiv = b;
-            SmartDashboard.putBoolean(this.name + "/" + this.name + "-tag-in-vision", b);
-            return this;
-        }
-
-        public LimeLightPoseEstimateWrapper withAmbiguity(double ambiguity) {
-            this.ambiguity = ambiguity;
-            Logger.recordOutput("limelight/" + this.name + "/ambiguity", ambiguity);
-            return this;
-        }
-
-        private double adjustStdv(double stdv, double distanceToTarget) {
-            return stdv + stdv * (distanceToTarget * distanceToTarget) / Localization.kStdvDemoninator.getNumber();
+        else
+        {
+            SmartDashboard.putBoolean("localization/" + name + "-vision-accepted", false);
+            Logger.recordOutput("localization/" + name + "/visionAccepted", false);
         }
     }
 }
+
+private boolean poseEstimateIsValid(LimelightHelpers.PoseEstimate estimate, int index) {
+    return 
+        LimelightHelpers.validPoseEstimate(estimate) &&
+        Localization.belowAmbiguityThreshold(estimate, index) &&
+        estimate.avgTagDist < (index==0?kRejectionDistance.getNumber():0.35) && Math.abs(this.getRotationRateDegrees()) < kRejectionRotationRate.getNumber();
+}
+
+*/
