@@ -1,9 +1,12 @@
 package redrocklib.logging;
 
+import org.littletonrobotics.junction.AutoLogOutput;
+
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 public class SmartDashboardBoolean {
     private boolean defaultValue;
+    @AutoLogOutput(key = "{key}")
     private boolean lastValue;
     private String key;
 

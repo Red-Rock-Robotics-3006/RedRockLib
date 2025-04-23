@@ -1,11 +1,14 @@
 package redrocklib.logging;
 
+import org.littletonrobotics.junction.AutoLogOutput;
+
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 public class SmartDashboardNumber {
     public static final boolean kEnableDashboardTuning = true;
 
     private double defaultValue;
+    @AutoLogOutput(key = "{key}")
     private double lastValue;
     private String key;
     private boolean tuningEnabled = true;
