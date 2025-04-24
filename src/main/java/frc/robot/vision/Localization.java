@@ -24,6 +24,7 @@ public class Localization {
     private static double[][] limeLightStdvs;
     private static double[] ambiguityThresholds;
     private static double[] distanceThresholds;
+    public static final int kRejectionRotationRate = 400;
 
     private static PoseEstimate[] estimates;
 
@@ -244,7 +245,7 @@ public void updateVisionMeasurements() {
     LimelightHelpers.PoseEstimate[] estimates = Localization.getPoseEstimates();
     for(int i = 0; i < estimates.length; i++) {
         String name = Localization.getLLName(i);
-        if(poseEstimateIsValid(estimates[i], i))
+        if(this.poseEstimateIsValid(estimates[i], i))
         {
             this.addVisionMeasurement(
                 estimates[i].pose,
@@ -270,7 +271,7 @@ private boolean poseEstimateIsValid(LimelightHelpers.PoseEstimate estimate, int 
         (Double.compare(estimate.pose.getX(), 0) > 0 && Double.compare(estimate.pose.getY(), 0) > 0) && // Estimate is not (0,0)
         Localization.belowAmbiguityThreshold(estimate, index) &&                                        // Estimate has low ambiguity
         Localization.withinRejectionDistance(estimate, index) &&                                        // Tags are not too far away
-        Math.abs(this.getRotationRateDegrees()) < this.kRejectionRotationRate.getNumber();              // Robot rotation is slow
+        Math.abs(this.getRotationRateDegrees()) < Localization.kRejectionRotationRate;                  // Robot rotation is slow
 }
 
 */
