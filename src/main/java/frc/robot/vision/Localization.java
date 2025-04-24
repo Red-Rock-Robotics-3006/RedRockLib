@@ -23,6 +23,7 @@ public class Localization {
     private static String[] limeLightNames;
     private static double[][] limeLightStdvs;
     private static double[] ambiguityThresholds;
+    private static double[] distanceThresholds;
 
     private static PoseEstimate[] estimates;
 
@@ -34,14 +35,13 @@ public class Localization {
             new int[][] {{6, 7, 8, 9, 10, 11, 17, 18, 19, 20, 21, 22}}, // Tags
             new String[] {"climb", "front"},                            // Names
             new double[][] {{0.9, 0.9, 9999}, {1.2, 1.2, 9999}},        // Stdvs
-            new double[] {0.2, 0.1}                                     // Ambiguity
+            new double[] {0.2, 0.1},                                    // Ambiguity
+            new double[] {5, 0.5}                                       // Distance
         );
     }
 
-    public static void initialize(int[][] vIDs, String[] llNames, double[][] llStdvs, double[] aThresholds) {
+    public static void initialize(int[][] vIDs, String[] llNames, double[][] llStdvs, double[] aThresholds, double[] dThresholds) {
         Localization.limeLightNames = llNames;
-        Localization.limeLightStdvs = llStdvs;
-        Localization.ambiguityThresholds = aThresholds;
 
         if(vIDs.length < llNames.length)
         {
@@ -51,6 +51,33 @@ public class Localization {
         }
         else
             Localization.validIDs = vIDs;
+            
+        if(llStdvs.length < llNames.length)
+        {
+            Localization.limeLightStdvs = new double[llNames.length][];
+            for(int i = 0; i < llNames.length; i++)
+                Localization.limeLightStdvs[i] = llStdvs[0];
+        }
+        else
+            Localization.limeLightStdvs = llStdvs;
+            
+        if(aThresholds.length < llNames.length)
+        {
+            Localization.ambiguityThresholds = new double[llNames.length];
+            for(int i = 0; i < llNames.length; i++)
+                Localization.ambiguityThresholds[i] = aThresholds[0];
+        }
+        else
+            Localization.ambiguityThresholds = aThresholds;
+            
+        if(dThresholds.length < llNames.length)
+        {
+            Localization.distanceThresholds = new double[llNames.length];
+            for(int i = 0; i < llNames.length; i++)
+                Localization.distanceThresholds[i] = dThresholds[0];
+        }
+        else
+            Localization.distanceThresholds = dThresholds;
 
         estimates = new PoseEstimate[Localization.limeLightNames.length];
         for (int i = 0; i < Localization.limeLightNames.length; i++) {
@@ -62,9 +89,7 @@ public class Localization {
 
     public static void updateHeading(double headingDegrees, double rotationRateDegrees) {
         if(estimates == null)
-        {
             Localization.initialize();
-        }
 
         for(int i = 0; i < limeLightNames.length; i++){
             String name = "limelight-" + limeLightNames[i];
@@ -72,16 +97,20 @@ public class Localization {
             LimelightHelpers.SetRobotOrientation(name, headingDegrees, rotationRateDegrees, 0, 0, 0, 0);
             PoseEstimate estimate = LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2(name);
             if (estimate != null){
-                Logger.recordOutput("limelight/" + limeLightNames[i] + "/avgTagDist", estimate.avgTagDist);
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/avgTagDist", Localization.getAvgDistance(estimate, i));
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/avgTagDist", Localization.getAvgDistance(estimate, i));
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/tagCount", estimate.tagCount);
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/avgAmbiguity", Localization.getAvgAmbiguity(estimate, i));
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/belowAmbiguityThreshold", Localization.belowAmbiguityThreshold(estimate, i));
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/nullEstimate", false);
+                Pose2d mt1Pose = LimelightHelpers.getBotPose2d_wpiBlue(name);
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/MT1", mt1Pose==null?new Pose2d():mt1Pose);
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/MT2", estimate==null?new Pose2d():estimate.pose);
             }
+            else
+                Logger.recordOutput("limelight/" + limeLightNames[i] + "/nullEstimate", true);
 
-            Pose2d mt1Pose = LimelightHelpers.getBotPose2d_wpiBlue(name);
-            Logger.recordOutput("limelight/" + limeLightNames[i] + "/MT1", mt1Pose==null?new Pose2d():mt1Pose);
-            Logger.recordOutput("limelight/" + limeLightNames[i] + "/MT2", estimate==null?new Pose2d():estimate.pose);
-            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/avgTagDist", estimate.avgTagDist);
-            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/tagCount", estimate.tagCount);
-            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/avgAmbiguity", Localization.getAvgAmbiguity(estimate, i));
-            Logger.recordOutput("limelight/" + limeLightNames[i] + "/estimate/belowAmbiguityThreshold", Localization.belowAmbiguityThreshold(estimate, i));
+            Localization.estimates[i] = estimate;
         }
 
         if(storedPose != null)
@@ -139,16 +168,6 @@ public class Localization {
         return stdv + stdv * (distanceToTarget * distanceToTarget) / kStdvDemoninator.getNumber();
     }
 
-    public static double getAmbiguityThreshold(int index) {
-        if(index < 0 || index > ambiguityThresholds.length)
-        {
-            Logger.recordOutput("localization/exception", "Ambiguity threshold index out of bounds (" + index + "/" + ambiguityThresholds.length + ")");
-            return -1;
-        }
-
-        return ambiguityThresholds[index];
-    }
-
     public static double getAvgAmbiguity(PoseEstimate estimate, int index) {
         double ambiguitySum = 0;
         int validTags = 0;
@@ -160,11 +179,30 @@ public class Localization {
                     validTags++;
                 }
         
-        return ambiguitySum /= validTags;
+        return ambiguitySum / validTags;
     }
 
     public static boolean belowAmbiguityThreshold(PoseEstimate estimate, int index) {
-        return Localization.getAvgAmbiguity(estimate, index) < Localization.getAmbiguityThreshold(index);
+        return Localization.getAvgAmbiguity(estimate, index) < ambiguityThresholds[ambiguityThresholds.length>index&&index>=0?index:0];
+    }
+
+    public static double getAvgDistance(PoseEstimate estimate, int index) {
+        double distanceSum = 0;
+        int validTags = 0;
+        for (RawFiducial fiducial : estimate.rawFiducials)
+            for(int i : validIDs[validIDs.length>index&&index>=0?index:0])
+                if(i == fiducial.id)
+                {
+                    distanceSum += fiducial.distToCamera;
+                    validTags++;
+                }
+        
+        return distanceSum / validTags;
+    }
+
+    public static boolean withinRejectionDistance(PoseEstimate estimate, int index) {
+        
+        return Localization.getAvgDistance(estimate, index) < distanceThresholds[distanceThresholds.length>index&&index>=0?index:0];
     }
 }
 
@@ -231,8 +269,8 @@ private boolean poseEstimateIsValid(LimelightHelpers.PoseEstimate estimate, int 
         LimelightHelpers.validPoseEstimate(estimate) &&                                                 // Estimate exists and has tags
         (Double.compare(estimate.pose.getX(), 0) > 0 && Double.compare(estimate.pose.getY(), 0) > 0) && // Estimate is not (0,0)
         Localization.belowAmbiguityThreshold(estimate, index) &&                                        // Estimate has low ambiguity
-        estimate.avgTagDist < (index==0?kRejectionDistance.getNumber():0.35) &&                         // Tags are not too far away
-        Math.abs(this.getRotationRateDegrees()) < kRejectionRotationRate.getNumber();                   // Robot rotation is slow
+        Localization.withinRejectionDistance(estimate, index) &&                                        // Tags are not too far away
+        Math.abs(this.getRotationRateDegrees()) < this.kRejectionRotationRate.getNumber();              // Robot rotation is slow
 }
 
 */
