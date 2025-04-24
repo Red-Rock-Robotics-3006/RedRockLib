@@ -228,9 +228,11 @@ public void updateVisionMeasurements() {
 
 private boolean poseEstimateIsValid(LimelightHelpers.PoseEstimate estimate, int index) {
     return 
-        LimelightHelpers.validPoseEstimate(estimate) &&
-        Localization.belowAmbiguityThreshold(estimate, index) &&
-        estimate.avgTagDist < (index==0?kRejectionDistance.getNumber():0.35) && Math.abs(this.getRotationRateDegrees()) < kRejectionRotationRate.getNumber();
+        LimelightHelpers.validPoseEstimate(estimate) &&                                                 // Estimate exists and has tags
+        (Double.compare(estimate.pose.getX(), 0) > 0 && Double.compare(estimate.pose.getY(), 0) > 0) && // Estimate is not (0,0)
+        Localization.belowAmbiguityThreshold(estimate, index) &&                                        // Estimate has low ambiguity
+        estimate.avgTagDist < (index==0?kRejectionDistance.getNumber():0.35) &&                         // Tags are not too far away
+        Math.abs(this.getRotationRateDegrees()) < kRejectionRotationRate.getNumber();                   // Robot rotation is slow
 }
 
 */
